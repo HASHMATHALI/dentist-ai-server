@@ -1,7 +1,8 @@
 """
 Dentist AI model server (lightweight ONNX version).
 
-Runs the ConvNeXt-Tiny dental classifier (Abrasion / Caries / Crown / Filling)
+Runs the SigLIP dental classifier (Calculus / Caries / Gingivitis / Mouth Ulcer /
+Tooth Discoloration / Hypodontia), INT8-quantized,
 with onnxruntime instead of PyTorch, so it fits comfortably in a 512 MB host
 (Render free tier). Answers POST /predict in the exact JSON contract the
 Dentist AI website expects (src/lib/analysis/types.ts).
@@ -24,22 +25,32 @@ from PIL import Image
 
 MODEL_URL = os.environ.get(
     "MODEL_URL",
-    "https://huggingface.co/hashmath2005/dentist-ai-weights/resolve/main/dental.onnx",
+    "https://huggingface.co/hashmath2005/dentist-ai-weights/resolve/main/dental-siglip-int8.onnx",
 )
 HERE = os.path.dirname(os.path.abspath(__file__))
-MODEL_PATH = os.path.join(HERE, "dental.onnx")
-CLASSES = [c.strip() for c in os.environ.get("CLASSES", "abrasion,caries,crown,filling").split(",")]
-MEAN = np.array([0.485, 0.456, 0.406], dtype=np.float32)
-STD = np.array([0.229, 0.224, 0.225], dtype=np.float32)
+MODEL_PATH = os.path.join(HERE, "dental-siglip-int8.onnx")
+CLASSES = [c.strip() for c in os.environ.get("CLASSES", "calculus,caries,gingivitis,mouth_ulcer,tooth_discoloration,hypodontia").split(",")]
+MEAN = np.array([0.5, 0.5, 0.5], dtype=np.float32)
+STD = np.array([0.5, 0.5, 0.5], dtype=np.float32)
 MIN_CONFIDENCE = 0.5
 
 EXPLANATIONS = {
+    "calculus": "The model noticed possible tartar (hardened plaque) build-up on the teeth.",
+    "gingivitis": "The model noticed possible signs of gum inflammation, such as redness or swelling.",
+    "mouth_ulcer": "The model noticed what may be a mouth ulcer (a small sore in the mouth).",
+    "tooth_discoloration": "The model noticed possible staining or colour changes on the teeth.",
+    "hypodontia": "The model noticed what may be one or more missing teeth.",
     "abrasion": "The model noticed possible wear on the tooth surface, which can come from brushing too hard or grinding.",
     "caries": "The model noticed a possible area of tooth decay (a cavity) in this image.",
     "crown": "The model noticed what appears to be a dental crown (a cap over a tooth).",
     "filling": "The model noticed what appears to be an existing dental filling.",
 }
 RECOMMENDATIONS = {
+    "calculus": ["Consider a professional cleaning to remove tartar", "Brush twice daily and floss once a day"],
+    "gingivitis": ["Brush gently along the gumline twice a day", "Floss daily", "Consider a dental check-up if gums bleed often"],
+    "mouth_ulcer": ["Avoid spicy or acidic foods while it heals", "See a dentist or doctor if it lasts more than 2 weeks"],
+    "tooth_discoloration": ["Limit coffee, tea and tobacco", "Ask a dentist about safe whitening or cleaning options"],
+    "hypodontia": ["Consider a dental visit to confirm with an X-ray", "A dentist can discuss options to replace missing teeth"],
     "abrasion": [
         "Use a soft-bristled toothbrush and gentle pressure",
         "Mention any grinding or clenching to your dentist",
@@ -115,7 +126,7 @@ def _result(image_type, status, findings, explanation, recommendations, started,
         "findings": findings,
         "explanation": explanation,
         "recommendations": recommendations,
-        "model": {"id": "dentist-ai-convnext", "version": "1.1", "isMock": False},
+        "model": {"id": "dentist-ai-siglip", "version": "2.0", "isMock": False},
         "durationMs": int((time.time() - started) * 1000),
     }
 
@@ -136,7 +147,7 @@ async def predict(image: UploadFile = File(...), imageType: str = Form("photo"))
     except Exception:
         return _result(imageType, "poor_quality", [], "This image could not be read. Please try a clearer JPG or PNG photo.", [], started, supported=False)
 
-    logits = session.run(None, {"input": x})[0][0]
+    logits = session.run(None, {session.get_inputs()[0].name: x})[0][0]
     probs = _softmax(logits)
     idx = int(probs.argmax())
     key = CLASSES[idx].lower()
